@@ -16,7 +16,11 @@
 
 import { z } from 'zod';
 import zodToJsonSchema from 'zod-to-json-schema';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
+import { sanitizeForFilePath } from './utils';
 import type * as playwright from 'playwright';
 import type { Tool } from './tool';
 
@@ -158,24 +162,48 @@ const selectOption: Tool = {
 
 const screenshotSchema = z.object({
   raw: z.boolean().optional().describe('Whether to return without compression (in PNG format). Default is false, which returns a JPEG image.'),
+  outputDir: z.string().optional().describe('Local directory path to save the screenshot. If not specified, it will be saved in the "pic" directory at the project root.'),
 });
 
 const screenshot: Tool = {
   capability: 'core',
   schema: {
     name: 'browser_take_screenshot',
-    description: `Take a screenshot of the current page. You can't perform actions based on the screenshot, use browser_snapshot for actions.`,
+    description: `Take a screenshot of the current page and save it to local directory.`,
     inputSchema: zodToJsonSchema(screenshotSchema),
   },
 
   handle: async (context, params) => {
     const validatedParams = screenshotSchema.parse(params);
     const tab = context.currentTab();
-    const options: playwright.PageScreenshotOptions = validatedParams.raw ? { type: 'png', scale: 'css' } : { type: 'jpeg', quality: 50, scale: 'css' };
-    const screenshot = await tab.page.screenshot(options);
-    return {
-      content: [{ type: 'image', data: screenshot.toString('base64'), mimeType: validatedParams.raw ? 'image/png' : 'image/jpeg' }],
-    };
+    
+    try {
+      // 決定輸出目錄路徑
+      const rootDir = process.cwd();
+      const outputDir = validatedParams.outputDir || path.join(rootDir, 'pic');
+      
+      // 確保目錄存在
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      // 生成檔案名稱，使用當前時間戳
+      const timestamp = new Date().toISOString();
+      const filename = `screenshot-${sanitizeForFilePath(timestamp)}.png`;
+      const filePath = path.join(outputDir, filename);
+      
+      // 截圖並保存到本機
+      await tab.page.screenshot({ type: 'png', scale: 'css', path: filePath });
+      
+      return {
+        content: [{ type: 'text', text: `Screenshot saved to: ${filePath}` }],
+      };
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{ type: 'text', text: `Error saving screenshot: ${errorMessage}` }],
+      };
+    }
   },
 };
 
